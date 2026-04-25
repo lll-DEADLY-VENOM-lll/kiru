@@ -1,27 +1,30 @@
-# 1. Updated Base Image: Node.js 20 (LTS) aur Python 3.11/3.12 ka use karein
-FROM nikolaik/python-nodejs:python3.11-nodejs20-slim
+# 1. Python 3.10 use karein (Aapke error mein yahi version dikh raha hai)
+FROM python:3.10-slim-buster
 
-# 2. Environment variables set karein
-ENV PYTHONDONTWRITEBYTECODE=1
-ENV PYTHONUNBUFFERED=1
+# 2. Update aur Basic Dependencies install karein
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl \
+    git \
+    gnupg \
+    ffmpeg \
+    build-essential \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
 
-# 3. System dependencies install karein
-RUN apt-get update && \
-    apt-get install -y --no-install-recommends ffmpeg && \
-    apt-get clean && \
-    rm -rf /var/lib/apt/lists/*
+# 3. Node.js 20 (LTS) ko manually install karein (Taki 'node' command mil sake)
+RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
+    && apt-get install -y nodejs \
+    && npm install -g npm@latest
 
 # 4. Working directory set karein
 WORKDIR /app
 
-# 5. Pehle requirements copy karein (Layer caching ke liye)
-# Isse agar aap sirf code change karenge, toh dependencies baar-baar install nahi hongi
+# 5. Pehle requirements copy karke install karein (Cache optimization)
 COPY requirements.txt .
 RUN pip3 install --no-cache-dir -U -r requirements.txt
 
-# 6. Baaki bacha hua code copy karein
+# 6. Baaki saara code copy karein
 COPY . .
 
-# 7. Command ko fix karein
-# Agar aapki file ka naam 'start' hai toh:
+# 7. Start command
 CMD ["bash", "start"]
