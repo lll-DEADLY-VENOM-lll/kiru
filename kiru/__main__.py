@@ -1,6 +1,5 @@
 import asyncio
 import importlib
-
 from pyrogram import idle
 from pytgcalls.exceptions import NoActiveGroupCall
 
@@ -13,14 +12,14 @@ from kiru.utils.database import get_banned_users, get_gbanned
 from config import BANNED_USERS
 
 async def init():
-    # Assistant strings check ko thoda saaf (clean) banaya gaya hai
+    # 1. Assistant Clients Check
     if not any([config.STRING1, config.STRING2, config.STRING3, config.STRING4, config.STRING5]):
-        LOGGER(__name__).error("Assistant client variables (STRING1-5) defined nahi hain, exiting...")
+        LOGGER(__name__).error("Assistant client variables (STRING1-5) defined nahi hain.")
         return
 
     await sudo()
 
-    # Banned users load karne ka logic
+    # 2. Database se Banned Users load karna
     try:
         users = await get_gbanned()
         for user_id in users:
@@ -29,46 +28,62 @@ async def init():
         for user_id in users:
             BANNED_USERS.add(user_id)
     except Exception as e:
-        LOGGER(__name__).warning(f"Banned users load karne mein error: {e}")
+        LOGGER(__name__).warning(f"Banned users loading error: {e}")
 
-    # Bot start karein
+    # 3. Clients Start
     await app.start()
-
-    # Modules import karein
-    for all_module in ALL_MODULES:
-        importlib.import_module("kiru.plugins." + all_module)
-    
-    LOGGER("kiru.plugins").info("Successfully Imported Modules...")
-
     await userbot.start()
     await Anony.start()
+    LOGGER("kiru").info("Sare Clients Start ho gaye hain.")
 
-    # Stream call setup
+    # 4. Plugins Import (Fixing Plugging Error)
+    for all_module in ALL_MODULES:
+        try:
+            # "kiru.plugins." ensure karta hai ki path sahi ho
+            module_path = "kiru.plugins." + all_module if not all_module.startswith(".") else "kiru.plugins" + all_module
+            importlib.import_module(module_path)
+        except Exception as e:
+            LOGGER("kiru.plugins").error(f"Module {all_module} load nahi ho paya: {e}")
+
+    LOGGER("kiru.plugins").info("Plugins Import Process Complete.")
+
+    # 5. Call Setup
     try:
         await Anony.stream_call("https://te.legra.ph/file/29f784eb49d230ab62e9e.mp4")
     except NoActiveGroupCall:
-        LOGGER("kiru").error(
-            "Please turn on the videochat of your log group/channel.\n\nStopping Bot..."
-        )
-        exit()
+        LOGGER("kiru").error("Video Chat on karein! Bot band ho raha hai...")
+        return
     except Exception as e:
-        LOGGER("kiru").error(f"Streaming error: {e}")
+        LOGGER("kiru").warning(f"Stream call error: {e}")
 
     await Anony.decorators()
-    
-    # Hex code ko normal text mein badal diya gaya hai readability ke liye
-    LOGGER("kiru").info("Kiru Music Bot Started Successfully.")
-    
+    LOGGER("kiru").info("Kiru Music Bot is now Online!")
+
+    # 6. Idle - Bot ko chalu rakhne ke liye
     await idle()
+
+    # 7. Graceful Shutdown (RuntimeWarning fix yahan hai)
+    LOGGER("kiru").info("Shutting down... Pending tasks clean kiye ja rahe hain.")
     
-    # Graceful Shutdown
-    await app.stop()
-    await userbot.stop()
-    LOGGER("kiru").info("Stopping Kiru Music Bot...")
+    # Clients ko stop karne se pehle thoda wait taaki tasks finish ho sakein
+    if app.is_connected:
+        await app.stop()
+    if userbot.is_connected:
+        await userbot.stop()
+    
+    LOGGER("kiru").info("Bot Successfully Stopped.")
 
 if __name__ == "__main__":
-    # Modern Python (3.7+) ke liye asyncio.run best hai
+    # Event loop handling for Python 3.10+
+    loop = asyncio.get_event_loop()
     try:
-        asyncio.run(init())
+        loop.run_until_complete(init())
     except KeyboardInterrupt:
+        # User ne Ctrl+C dabaya
         pass
+    except Exception as e:
+        LOGGER("kiru").error(f"Fatal Error: {e}")
+    finally:
+        # Loop band karne se pehle ensure karein ki sab clean ho
+        if loop.is_running():
+            loop.close()
