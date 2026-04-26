@@ -7,38 +7,43 @@ class HelpPanel:
         self.ikb = types.InlineKeyboardButton
 
     def help_markup(self, _lang: dict, back: bool = False) -> types.InlineKeyboardMarkup:
+        # .get() use karne se KeyError nahi aayega
+        back_text = _lang.get("back", "ʙᴀᴄᴋ")
+        close_text = _lang.get("close", "ᴄʟᴏsᴇ")
+        
         if back:
-            rows = [[self.ikb(text=_lang["back"], callback_data="help back"), 
-                     self.ikb(text=_lang["close"], callback_data="help close")]]
+            rows = [[self.ikb(text=back_text, callback_data="help back"), 
+                     self.ikb(text=close_text, callback_data="help close")]]
         else:
-            # Ye buttons aapke strings ke hisaab se hone chahiye
             cbs = ["admins", "auth", "blist", "lang", "ping", "play", "queue", "stats", "sudo"]
-            buttons = [self.ikb(text=_lang[f"help_{cb}"], callback_data=f"help {cb}") for cb in cbs]
+            buttons = []
+            for cb in cbs:
+                # Agar language file mein key na mile toh default text
+                text = _lang.get(f"help_{cb}", cb.capitalize())
+                buttons.append(self.ikb(text=text, callback_data=f"help {cb}"))
+            
             rows = [buttons[i : i + 3] for i in range(0, len(buttons), 3)]
-            # Owner button
             rows.append([self.ikb(text="ᴏᴡɴᴇʀ", url=f"tg://user?id={config.OWNER_ID}")])
             
         return self.ikm(rows)
 
     def help_back_markup(self, _lang: dict) -> types.InlineKeyboardMarkup:
+        back_text = _lang.get("back", "ʙᴀᴄᴋ")
+        close_text = _lang.get("close", "ᴄʟᴏsᴇ")
         rows = [[
-            self.ikb(text=_lang["back"], callback_data="help back"), 
-            self.ikb(text=_lang["close"], callback_data="help close")
+            self.ikb(text=back_text, callback_data="help back"), 
+            self.ikb(text=close_text, callback_data="help close")
         ]]
         return self.ikm(rows)
 
-# --- SAHI EXPORTS (Yeh lines fix karengi error) ---
-
-# Pehle instance banayein
+# Exports
 _hp = HelpPanel()
-
-# Plugin line 29 (help_pannel(_, True)) ke liye ise function banana zaroori hai
 help_pannel = _hp.help_markup
-
-# Baaki functions
 help_back_markup = _hp.help_back_markup
 
 def private_help_panel(_):
+    # Safe text for Help button
+    text = _.get("help_1", "Hᴇʟᴘ") if isinstance(_, dict) else "Hᴇʟᴘ"
     buttons = [
         [
             types.InlineKeyboardButton(
