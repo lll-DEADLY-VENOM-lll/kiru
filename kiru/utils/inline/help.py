@@ -1,4 +1,4 @@
- from pyrogram import types
+from pyrogram import types
 import config # Ya 'from kiru import config' agar aapka setup waisa hai
 
 class HelpPanel:
