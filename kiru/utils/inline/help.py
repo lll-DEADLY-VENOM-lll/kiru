@@ -1,5 +1,5 @@
 from pyrogram import types
-from anony import config
+from kiru import config
 
 class HelpPanel:
     def __init__(self):
