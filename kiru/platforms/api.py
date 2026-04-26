@@ -7,7 +7,7 @@ import aiofiles
 from selectolax.parser import HTMLParser # Sabse fast HTML parser
 from dataclasses import dataclass
 from typing import Optional
-from anony import app, logger
+from kiru import app, logger
 
 # Pre-compiled Patterns
 TG_LINK_PATTERN = re.compile(r"https?://t\.me/(?:c/)?([^/]+)/(\d+)")
