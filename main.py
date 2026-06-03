@@ -55,33 +55,84 @@ def random_ua():
     return random.choice(USER_AGENTS)
 
 
-INNERTUBE_KEY = "AIzaSyAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8"
 INNERTUBE_SEARCH_URL = "https://www.youtube.com/youtubei/v1/search"
 INNERTUBE_BROWSE_URL = "https://www.youtube.com/youtubei/v1/browse"
-INNERTUBE_CONTEXT = {
-    "client": {
-        "clientName": "WEB",
+
+# Client configs — ordered from most reliable to least for server/datacenter IPs.
+# WEB_EMBEDDED_PLAYER (56) avoids 402s that WEB (1) throws on restricted IPs.
+INNERTUBE_CLIENTS = [
+    {
+        "clientName": "WEB_EMBEDDED_PLAYER",
         "clientVersion": "2.20240101.00.00",
-        "hl": "hi",
-        "gl": "IN",
+        "clientScreen": "EMBED",
+        "clientFormFactor": "UNKNOWN_FORM_FACTOR",
+        "x_client_name": "56",
+        "x_client_version": "2.20240101.00.00",
+    },
+    {
+        "clientName": "ANDROID_EMBEDDED_PLAYER",
+        "clientVersion": "17.36.4",
+        "androidSdkVersion": 30,
+        "x_client_name": "55",
+        "x_client_version": "17.36.4",
+    },
+    {
+        "clientName": "TVHTML5_SIMPLY_EMBEDDED_PLAYER",
+        "clientVersion": "2.0",
+        "x_client_name": "85",
+        "x_client_version": "2.0",
+    },
+    {
+        "clientName": "WEB",
+        "clientVersion": "2.20240617.00.00",
+        "x_client_name": "1",
+        "x_client_version": "2.20240617.00.00",
+    },
+]
+
+_client_index: int = 0
+
+
+def _get_innertube_context() -> tuple[dict, dict]:
+    """Return (context_payload, headers) for the current client, rotating on failure."""
+    global _client_index
+    cfg = INNERTUBE_CLIENTS[_client_index % len(INNERTUBE_CLIENTS)]
+    context = {
+        "client": {
+            "clientName": cfg["clientName"],
+            "clientVersion": cfg["clientVersion"],
+            "hl": "hi",
+            "gl": "IN",
+            **{k: v for k, v in cfg.items()
+               if k not in ("clientName", "clientVersion", "x_client_name", "x_client_version")},
+        }
     }
-}
+    headers = {
+        "Content-Type": "application/json",
+        "User-Agent": random_ua(),
+        "Accept-Language": "hi-IN,hi;q=0.9,en;q=0.8",
+        "X-YouTube-Client-Name": cfg["x_client_name"],
+        "X-YouTube-Client-Version": cfg["x_client_version"],
+        "Origin": "https://www.youtube.com",
+        "Referer": "https://www.youtube.com/",
+        "X-Origin": "https://www.youtube.com",
+    }
+    return context, headers
+
+
+def _rotate_client():
+    """Move to next client after repeated failures."""
+    global _client_index
+    _client_index = (_client_index + 1) % len(INNERTUBE_CLIENTS)
+    print(f"[innertube] Rotating to client: {INNERTUBE_CLIENTS[_client_index]['clientName']}")
+
+
 TRENDING_QUERIES = [
     "viral trending india 2025",
     "new bollywood songs 2025",
     "trending videos india today",
     "popular hindi songs 2025",
 ]
-
-INNERTUBE_HEADERS = lambda: {
-    "Content-Type": "application/json",
-    "User-Agent": random_ua(),
-    "Accept-Language": "hi-IN,hi;q=0.9,en;q=0.8",
-    "X-YouTube-Client-Name": "1",
-    "X-YouTube-Client-Version": "2.20240101.00.00",
-    "Origin": "https://www.youtube.com",
-    "Referer": "https://www.youtube.com/",
-}
 
 CHANNEL_VIDEOS_PARAMS = "EgZ2aWRlb3PyBgQKAjoA"
 
@@ -390,32 +441,45 @@ def parse_channel_videos(data: dict, limit: int = 20) -> list[VideoItem]:
     return out
 
 
+async def _innertube_post(url: str, payload: dict) -> dict:
+    """POST to InnerTube, rotating clients on 402."""
+    last_exc: Exception = RuntimeError("No clients tried")
+    for _ in range(len(INNERTUBE_CLIENTS)):
+        context, headers = _get_innertube_context()
+        try:
+            async with httpx.AsyncClient(timeout=15) as c:
+                r = await c.post(
+                    url,
+                    params={"prettyPrint": "false"},
+                    json={"context": context, **payload},
+                    headers=headers,
+                )
+                if r.status_code == 402:
+                    client_name = INNERTUBE_CLIENTS[_client_index % len(INNERTUBE_CLIENTS)]["clientName"]
+                    print(f"[innertube] 402 from {client_name}, rotating client...")
+                    _rotate_client()
+                    last_exc = httpx.HTTPStatusError("402", request=r.request, response=r)
+                    continue
+                r.raise_for_status()
+                return r.json()
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code == 402:
+                _rotate_client()
+                last_exc = e
+                continue
+            raise
+    raise last_exc
+
+
 async def innertube_search(query: str) -> dict:
-    params = {"key": INNERTUBE_KEY, "prettyPrint": "false"}
-    async with httpx.AsyncClient(timeout=15) as c:
-        r = await c.post(
-            INNERTUBE_SEARCH_URL,
-            params=params,
-            json={"context": INNERTUBE_CONTEXT, "query": query},
-            headers=INNERTUBE_HEADERS(),
-        )
-        r.raise_for_status()
-        return r.json()
+    return await _innertube_post(INNERTUBE_SEARCH_URL, {"query": query})
 
 
 async def innertube_browse(browse_id: str, params: str = "") -> dict:
-    payload: dict = {"context": INNERTUBE_CONTEXT, "browseId": browse_id}
+    payload: dict = {"browseId": browse_id}
     if params:
         payload["params"] = params
-    async with httpx.AsyncClient(timeout=15) as c:
-        r = await c.post(
-            INNERTUBE_BROWSE_URL,
-            params={"key": INNERTUBE_KEY, "prettyPrint": "false"},
-            json=payload,
-            headers=INNERTUBE_HEADERS(),
-        )
-        r.raise_for_status()
-        return r.json()
+    return await _innertube_post(INNERTUBE_BROWSE_URL, payload)
 
 
 async def do_search(query: str, limit: int = 20) -> list[VideoItem]:
@@ -564,9 +628,10 @@ async def fetch_channel_info(channel_id: str) -> ChannelInfo:
     return info
 
 
-# ─── yt-dlp strategies (no cookies required) ──────────────────────────────────
-# Ordered from most reliable to least. tv_embedded + ios work without cookies
-# even on datacenter IPs. "skip": ["webpage"] avoids bot-detection consent pages.
+# ─── yt-dlp strategies ────────────────────────────────────────────────────────
+# tv_embedded and ios are the most reliable on server/datacenter IPs because
+# they do not require PO tokens. WEB requires a valid PO token from 2024 onward.
+# mediaconnect / web_safari are newer clients that sometimes bypass restrictions.
 STRATEGIES = [
     ("tv_embedded", {
         "extractor_args": {"youtube": {
@@ -592,6 +657,12 @@ STRATEGIES = [
             "skip": ["webpage"],
         }},
     }),
+    ("android_testsuite", {
+        "extractor_args": {"youtube": {
+            "player_client": ["android_testsuite"],
+            "skip": ["webpage"],
+        }},
+    }),
     ("mweb", {
         "extractor_args": {"youtube": {
             "player_client": ["mweb"],
@@ -607,9 +678,17 @@ STRATEGIES = [
     ("default", {}),
 ]
 
+# COOKIES_FILE: set env var YOUTUBE_COOKIES_FILE=/path/to/cookies.txt to enable.
+# This is the most reliable fix for 502/bot-detection on server IPs.
+# Export cookies from your browser using a cookies.txt extension (Netscape format).
+_COOKIES_FILE: str = os.environ.get("YOUTUBE_COOKIES_FILE", "")
+
 # Format preference: format 18 is YouTube's 360p MP4, served via simple CDN
 # and often bypasses PO-token requirements. Falls back to best available.
 FORMAT_STRING = "18/bestvideo[ext=mp4][height<=720]+bestaudio[ext=m4a]/best[ext=mp4][height<=720]/bestvideo+bestaudio/best"
+
+# Stream URL expiry: YouTube signed URLs expire in ~6 hours, cache for 5.5h max
+STREAM_CACHE_TTL = int(5.5 * 60 * 60)
 
 
 def _ytdlp_extract(video_id: str, extra: dict) -> dict:
@@ -621,14 +700,18 @@ def _ytdlp_extract(video_id: str, extra: dict) -> dict:
         "nocheckcertificate": True,
         "skip_download": True,
         "ignoreerrors": False,
-        "extractor_retries": 2,
-        "socket_timeout": 20,
+        "extractor_retries": 3,
+        "socket_timeout": 25,
         "http_headers": {
             "User-Agent": random_ua(),
             "Accept-Language": "hi-IN,hi;q=0.9,en;q=0.8",
         },
         **extra,
     }
+    # Use cookies file if available — most reliable fix for server-IP bot detection
+    if _COOKIES_FILE and os.path.isfile(_COOKIES_FILE):
+        opts["cookiefile"] = _COOKIES_FILE
+
     with yt_dlp.YoutubeDL(opts) as ydl:
         info = ydl.extract_info(f"https://www.youtube.com/watch?v={video_id}", download=False)
         if not info:
@@ -636,36 +719,57 @@ def _ytdlp_extract(video_id: str, extra: dict) -> dict:
         url = info.get("url") or ""
         if not url:
             formats = info.get("formats") or []
-            # Prefer mp4 formats, then any with a URL
-            for fmt in reversed(formats):
-                if fmt.get("url") and fmt.get("ext") == "mp4":
-                    url = fmt["url"]
-                    break
-            if not url:
+            # Prefer mp4, then m4a/webm, then anything with a URL
+            for ext_pref in ("mp4", "m4a", "webm", None):
                 for fmt in reversed(formats):
-                    if fmt.get("url"):
+                    if not fmt.get("url"):
+                        continue
+                    if ext_pref is None or fmt.get("ext") == ext_pref:
                         url = fmt["url"]
                         break
+                if url:
+                    break
         if not url:
             raise ValueError("No stream URL found")
-        return {"title": info.get("title", video_id), "stream": url}
+        return {"title": info.get("title", video_id), "stream": url, "ext": info.get("ext", "mp4")}
 
 
 async def get_stream(video_id: str) -> dict:
     cached = get_cached(_stream_cache, video_id)
     if cached:
-        return cached
+        # Validate cached URL is not obviously expired (contains expire= param)
+        stream_url = cached.get("stream", "")
+        if "expire" in stream_url:
+            import urllib.parse
+            qs = urllib.parse.parse_qs(urllib.parse.urlparse(stream_url).query)
+            expire_ts = int((qs.get("expire") or ["0"])[0])
+            if expire_ts and time.time() > expire_ts - 300:
+                print(f"[stream] Cached URL expired for {video_id}, re-fetching")
+                del _stream_cache[video_id]
+            else:
+                return cached
+        else:
+            return cached
+
+    errors: list[str] = []
     for name, extra in STRATEGIES:
         try:
             r = await asyncio.to_thread(_ytdlp_extract, video_id, extra)
             entry = {**r, "thumb": _thumb_url(video_id), "source": f"yt-dlp-{name}"}
-            set_cache(_stream_cache, video_id, entry)
+            set_cache(_stream_cache, video_id, entry, STREAM_CACHE_TTL)
             print(f"[stream OK] {name} → {video_id}")
             return entry
         except Exception as e:
-            print(f"[stream FAIL] {name}: {e}")
-    # Return a soft error — frontend will show friendly message
-    return {"error": "yh_unavailable"}
+            err_msg = str(e)
+            errors.append(f"{name}: {err_msg}")
+            print(f"[stream FAIL] {name}: {err_msg}")
+            # If error is clearly "video unavailable" (private/deleted), stop early
+            if any(kw in err_msg.lower() for kw in ("video unavailable", "private video", "has been removed")):
+                print(f"[stream] Video {video_id} is permanently unavailable, stopping retries")
+                return {"error": "video_unavailable", "detail": err_msg}
+
+    print(f"[stream] All strategies failed for {video_id}: {errors}")
+    return {"error": "stream_unavailable", "detail": "; ".join(errors[-2:])}
 
 
 # ─── API Routes ───────────────────────────────────────────────────────────────
@@ -700,8 +804,12 @@ async def category(name: str = Query(...), max: int = Query(24, le=40)):
 @app.get("/api/yt/stream", response_model=StreamInfo)
 async def stream(id: str = Query(...)):
     data = await get_stream(id)
-    if "error" in data and not data.get("stream"):
-        raise HTTPException(502, data["error"])
+    err = data.get("error")
+    if err and not data.get("stream"):
+        # video_unavailable = 404, stream failures = 503 (retryable), not 502
+        if err == "video_unavailable":
+            raise HTTPException(404, detail="Video unavailable (private or deleted)")
+        raise HTTPException(503, detail=f"Could not fetch stream: {data.get('detail', err)}")
     return StreamInfo(
         title=data.get("title"),
         stream=data.get("stream"),
@@ -716,15 +824,22 @@ async def channel(id: str = Query(...)):
     try:
         return await fetch_channel_info(id)
     except Exception as e:
-        print(f"[channel error] {e}")
-        raise HTTPException(502, f"Failed to fetch channel: {e}")
+        err_msg = str(e)
+        print(f"[channel error] {err_msg}")
+        # 404 for clearly missing channels, 503 for transient upstream errors
+        if any(kw in err_msg.lower() for kw in ("not found", "404", "channel does not exist")):
+            raise HTTPException(404, detail=f"Channel not found: {id}")
+        raise HTTPException(503, detail=f"YouTube temporarily unavailable, try again shortly")
 
 
 @app.get("/api/yt/download")
 async def download(request: Request, id: str = Query(...)):
     data = await get_stream(id)
-    if "error" in data and not data.get("stream"):
-        raise HTTPException(502, data["error"])
+    err = data.get("error")
+    if err and not data.get("stream"):
+        if err == "video_unavailable":
+            raise HTTPException(404, detail="Video unavailable (private or deleted)")
+        raise HTTPException(503, detail=f"Could not fetch stream: {data.get('detail', err)}")
 
     stream_url = data["stream"]
     safe = re.sub(r"[^\w\s\-_().]", "", data.get("title", id)).strip()[:100] or id
